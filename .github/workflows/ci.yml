@@ -1,0 +1,61 @@
+name: Nova ERP CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: supersecretpassword
+          POSTGRES_DB: nova_erp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:supersecretpassword@localhost:5432/nova_erp_test?schema=public
+      NEXTAUTH_SECRET: testing_secret_key_for_ci
+      NEXTAUTH_URL: http://localhost:3000
+
+    steps:
+    - name: 检出代码 (Checkout)
+      uses: actions/checkout@v4
+
+    - name: 设置 Node.js 环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: 安装依赖包
+      run: npm ci
+
+    - name: 生成 Prisma Client 与数据库迁移
+      run: |
+        npx prisma generate
+        npx prisma db push --accept-data-loss
+
+    - name: 执行类型检查 (Type Check)
+      run: npx tsc --noEmit
+
+    - name: 运行核心业务集成测试 (Vitest)
+      run: npm run test
+
+    - name: 安装 Playwright 浏览器内核
+      run: npx playwright install --with-deps chromium
+
+    - name: 运行端到端 UI 测试 (E2E)
+      run: npm run test:e2e
