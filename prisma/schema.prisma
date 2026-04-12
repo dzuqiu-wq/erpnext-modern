@@ -11,3 +11,212 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model User {
+  id           String    @id @default(uuid())
+  name         String?
+  email        String    @unique
+  password     String?
+  role         String    @default("Sales User")
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("users")
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String // 客户名称或公司名称
+  email     String?
+  phone     String?
+  company   String?
+  status    String   @default("Active") // 状态: Active, Inactive, Lead
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  salesOrders SalesOrder[]
+
+  @@map("customers")
+}
+
+model Item {
+  id           String   @id @default(uuid())
+  itemCode     String   @unique // 商品编码，如 ITEM-0001
+  itemName     String // 商品名称
+  description  String? // 详细描述
+  standardRate Float    @default(0.0) // 标准售价
+  stockUom     String   @default("PCS") // 库存单位: PCS, KG, Box 等
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  salesOrderItems    SalesOrderItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+  stockLedgers       StockLedger[]
+  stockBalances      StockBalance[]
+
+  @@map("items")
+}
+
+model Supplier {
+  id        String   @id @default(uuid())
+  name      String // 供应商名称
+  email     String?
+  phone     String?
+  status    String   @default("Active") // Active, Inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id          String   @id @default(uuid())
+  orderNumber String   @unique // 例如: PO-2026-0001
+  supplierId  String
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  status      String   @default("Draft") // Draft, Submitted, Completed, Cancelled
+  totalAmount Float    @default(0.0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items PurchaseOrderItem[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item          @relation(fields: [itemId], references: [id])
+  quantity        Float         @default(1.0)
+  rate            Float         @default(0.0) // 采购进价
+  amount          Float         @default(0.0)
+
+  @@map("purchase_order_items")
+}
+
+model SalesOrder {
+  id            String    @id @default(uuid())
+  orderNumber   String    @unique // 例如: SO-2026-0001
+  customerId    String
+  customer      Customer  @relation(fields: [customerId], references: [id])
+  status        String    @default("Draft") // 状态: Draft, Submitted, Completed, Cancelled
+  totalAmount   Float     @default(0.0) // 商品总额（折扣前）
+  discountAmount Float    @default(0.0) // 整单折扣金额
+  taxRate       Float     @default(0.0) // 税率百分比，如 13.0 表示 13%
+  grandTotal    Float     @default(0.0) // 含税总价 = (商品总额 - 折扣) * (1 + 税率/100)
+  deliveryDate  DateTime? // 交货日期
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  items SalesOrderItem[]
+
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id           String     @id @default(uuid())
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item       @relation(fields: [itemId], references: [id])
+  warehouseId  String?
+  warehouse    Warehouse? @relation(fields: [warehouseId], references: [id])
+  quantity     Float      @default(1.0)
+  rate         Float      @default(0.0) // 实际成交单价
+  amount       Float      @default(0.0) // quantity * rate
+
+  @@map("sales_order_items")
+}
+
+model Warehouse {
+  id        String   @id @default(uuid())
+  name      String // 仓库名称，如"成品库"
+  code      String   @unique // 仓库编码，如"WH-001"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stockLedgers     StockLedger[]
+  stockBalances    StockBalance[]
+  salesOrderItems  SalesOrderItem[]
+
+  @@map("warehouses")
+}
+
+model StockLedger {
+  id          String    @id @default(uuid())
+  itemId      String
+  item        Item      @relation(fields: [itemId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  qtyChange   Float // 数量变动：正数表示入库，负数表示出库
+  rate        Float    @default(0.0) // 本次交易的入库或出库单价
+  voucherType String // 凭证类型，如 "Purchase Receipt", "Sales Delivery", "Stock Entry"
+  voucherNo   String // 关联的单据编号，如 "PO-2026-0001"
+  createdAt   DateTime  @default(now())
+
+  @@map("stock_ledgers")
+}
+
+model StockBalance {
+  id            String    @id @default(uuid())
+  itemId        String
+  item          Item      @relation(fields: [itemId], references: [id])
+  warehouseId  String
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  actualQty     Float     @default(0.0) // 当前实际结存数量
+  stockValue    Float     @default(0.0) // 库存总价值
+  valuationRate Float     @default(0.0) // 移动加权平均单价
+  reservedQty  Float     @default(0.0) // 已预留数量(防超卖)
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([itemId, warehouseId]) // 同一个仓库里的同一个商品只能有一条结存记录
+  @@map("stock_balances")
+}
+
+model Account {
+  id          String   @id @default(uuid())
+  name        String   @unique // 科目名称，例如 "银行存款", "应收账款", "主营业务收入"
+  type        String   // 资产(Asset), 负债(Liability), 权益(Equity), 收入(Income), 支出(Expense)
+  isGroup     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  journalLines JournalEntryAccount[]
+
+  @@map("accounts")
+}
+
+model JournalEntry {
+  id            String   @id @default(uuid())
+  entryNumber   String   @unique // 凭证号，例如 JV-2026-0001
+  referenceType String?  // 关联单据类型，例如 "SalesOrder", "PurchaseOrder"
+  referenceId   String?  // 关联单据ID
+  postingDate   DateTime @default(now())
+  totalDebit    Float    @default(0.0) // 总借方金额
+  totalCredit   Float    @default(0.0) // 总贷方金额
+  createdAt     DateTime @default(now())
+
+  lines         JournalEntryAccount[]
+
+  @@map("journal_entries")
+}
+
+model JournalEntryAccount {
+  id             String       @id @default(uuid())
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId      String
+  account        Account      @relation(fields: [accountId], references: [id])
+  debit          Float        @default(0.0) // 借方
+  credit         Float        @default(0.0) // 贷方
+
+  @@map("journal_entry_accounts")
+}
