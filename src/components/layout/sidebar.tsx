@@ -6,51 +6,81 @@ import { usePathname } from "next/navigation";
 import {
   Home, Users, Package, ShoppingCart, Truck,
   ClipboardList, FileText, Settings, Warehouse, PackageCheck,
-  ChevronDown
+  ChevronDown, Factory, Send, Target
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { name: "工作台", href: "/", icon: Home, roles: ["System Manager", "Sales User", "Purchase User", "Warehouse Manager", "Accountant"] },
+  { name: "工作台", href: "/", icon: Home, roles: ["ADMIN", "SALES", "WAREHOUSE", "FINANCE", "PURCHASE"] },
   {
-    name: "销售 (Selling)", icon: ShoppingCart, roles: ["System Manager", "Sales User"],
+    name: "销售 (Selling)", icon: ShoppingCart, roles: ["ADMIN", "SALES"],
     children: [
       { name: "客户 (CRM)", href: "/crm/customers" },
+      { name: "商机看板", href: "/crm/opportunities" },
       { name: "商品 (Items)", href: "/selling/items" },
       { name: "销售订单 (Orders)", href: "/selling/orders" },
     ]
   },
   {
-    name: "采购 (Buying)", icon: Truck, roles: ["System Manager", "Purchase User"],
+    name: "采购 (Buying)", icon: Truck, roles: ["ADMIN", "PURCHASE"],
     children: [
       { name: "供应商 (Suppliers)", href: "/buying/suppliers" },
       { name: "采购订单 (Purchase)", href: "/buying/orders" },
     ]
   },
   {
-    name: "库存 (Stock)", icon: Warehouse, roles: ["System Manager", "Warehouse Manager", "Sales User", "Purchase User"],
+    name: "库存 (Stock)", icon: Warehouse, roles: ["ADMIN", "WAREHOUSE"],
     children: [
       { name: "仓库 (Warehouses)", href: "/stock/warehouses" },
       { name: "实时库存 (Balances)", href: "/stock/balances" },
     ]
   },
   {
-    name: "财务 (Accounting)", icon: FileText, roles: ["System Manager", "Accountant"],
+    name: "财务 (Accounting)", icon: FileText, roles: ["ADMIN", "FINANCE"],
     children: [
       { name: "科目表 (Accounts)", href: "/accounting/accounts" },
       { name: "日记账 (Journals)", href: "/accounting/journals" },
       { name: "财务报表 (Statements)", href: "/accounting/statements" },
     ]
   },
-  { name: "设置 (Settings)", href: "/settings/users", icon: Settings, roles: ["System Manager"] },
+  {
+    name: "生产管理 (Manufacturing)", icon: Factory, roles: ["ADMIN", "WAREHOUSE"],
+    children: [
+      { name: "生产单列表", href: "/manufacturing/work-orders" },
+      { name: "新建生产单", href: "/manufacturing/work-orders/new" },
+    ]
+  },
+  {
+    name: "发货管理 (Delivery)", icon: Send, roles: ["ADMIN", "SALES"],
+    children: [
+      { name: "送货单列表", href: "/delivery/notes" },
+      { name: "新建送货单", href: "/delivery/notes/new" },
+    ]
+  },
+  { name: "设置 (Settings)", href: "/settings/users", icon: Settings, roles: ["ADMIN"] },
 ];
 
 export function Sidebar({ userRole = "System Manager" }: { userRole?: string }) {
   const pathname = usePathname();
 
   const [openGroups, setOpenGroups] = useState<string[]>([
-    "销售 (Selling)", "采购 (Buying)", "库存 (Stock)", "财务 (Accounting)"
+    "销售 (Selling)", "采购 (Buying)", "库存 (Stock)", "财务 (Accounting)", "生产管理 (Manufacturing)", "发货管理 (Delivery)"
   ]);
+
+  // 角色映射：支持旧角色名和 RBAC 角色名
+  const roleMapping: Record<string, string[]> = {
+    'System Manager': ['ADMIN'],
+    'Sales User': ['SALES'],
+    'Purchase User': ['PURCHASE'],
+    'Warehouse Manager': ['WAREHOUSE'],
+    'Accountant': ['FINANCE'],
+  };
+
+  const userHasRole = (allowedRoles: string[]): boolean => {
+    const mappedRoles = roleMapping[userRole] || [];
+    const normalizedRole = userRole.toUpperCase();
+    return allowedRoles.includes(normalizedRole) || allowedRoles.some(r => mappedRoles.includes(r));
+  };
 
   const toggleGroup = (groupName: string) => {
     setOpenGroups(prev =>
@@ -67,7 +97,7 @@ export function Sidebar({ userRole = "System Manager" }: { userRole?: string }) 
       </div>
       <nav className="flex-1 space-y-2 px-4 py-6 overflow-y-auto">
         {navItems.map((item) => {
-          if (!item.roles.includes(userRole)) return null;
+          if (!userHasRole(item.roles)) return null;
 
           if (!item.children) {
             const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href as string));

@@ -12,18 +12,45 @@ datasource db {
   provider = "postgresql"
 }
 
+// --- 用户与权限 (RBAC) ---
+
 model User {
   id           String    @id @default(uuid())
   name         String?
   email        String    @unique
   password     String?
-  role         String    @default("Sales User")
+  // RBAC 角色：admin=系统管理员, sales=销售, warehouse=仓库管理, finance=财务
+  role         String    @default("SALES") // ADMIN, SALES, WAREHOUSE, FINANCE, PURCHASE
   isActive     Boolean   @default(true)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
+  auditLogs      AuditLog[]
+  activities     CustomerActivity[]
+  opportunities  Opportunity[]
+  assignedTickets Ticket[] @relation("AssignedTickets")
+
   @@map("users")
 }
+
+// --- 审计日志 ---
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?  // 操作人 ID
+  user        User?    @relation(fields: [userId], references: [id])
+  action      String   // 动作描述，如 "UPDATE", "DELETE", "CREATE"
+  entityName  String   // 操作的表名，如 "Customer", "SalesOrder"
+  entityId    String?  // 被操作记录的 ID
+  details     Json?    // 修改前后对比数据
+  ipAddress   String?  // 客户端 IP
+  userAgent   String?  // 客户端 UA
+  createdAt   DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+// --- CRM 基础底盘 ---
 
 model Customer {
   id        String   @id @default(uuid())
@@ -31,13 +58,63 @@ model Customer {
   email     String?
   phone     String?
   company   String?
-  status    String   @default("Active") // 状态: Active, Inactive, Lead
+
+  // CRM 扩展字段
+  level     String   @default("C") // 客户等级: A, B, C (A=大客户)
+  status    String   @default("Lead") // 客户状态: Lead(线索), Prospect(意向), Active(活跃), Churned(流失)
+  source    String?  // 来源渠道: 展会, 官网, 朋友推荐, 广告等
+  tags      Json?    // 标签数组，如 ["重要客户", "制造业", "华南"]
+  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  salesOrders SalesOrder[]
+  // 关联关系
+  salesOrders   SalesOrder[]
+  contacts       CustomerContact[]
+  activities     CustomerActivity[]
+  opportunities  Opportunity[]
+  tickets        Ticket[]  // 客户相关的工单
 
   @@map("customers")
+}
+
+// 客户联系人（多对一）
+model CustomerContact {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  name        String   // 联系人姓名
+  position    String?  // 职位
+  phone       String?  // 电话
+  wechat      String?  // 微信
+  email       String?
+  isPrimary   Boolean  @default(false) // 是否主联系人
+  
+  createdAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("customer_contacts")
+}
+
+// 客户沟通记录（多对一）
+model CustomerActivity {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  type        String   // 沟通类型: 电话, 邮件, 拜访, 微信, 其他
+  content     String   // 沟通内容摘要
+  followUpBy  String?  // 跟进人 ID
+  followUpByUser User? @relation(fields: [followUpBy], references: [id])
+  
+  activityDate DateTime @default(now()) // 沟通日期
+  nextFollowUp DateTime? // 下次跟进日期
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("customer_activities")
 }
 
 model Item {
@@ -116,6 +193,7 @@ model SalesOrder {
   updatedAt     DateTime  @updatedAt
 
   items SalesOrderItem[]
+  tickets Ticket[]  // 关联的售后工单
 
   @@map("sales_orders")
 }
@@ -219,4 +297,158 @@ model JournalEntryAccount {
   credit         Float        @default(0.0) // 贷方
 
   @@map("journal_entry_accounts")
+}
+
+// --- 生产管理模块 ---
+
+model WorkOrder {
+  id              String   @id @default(cuid())
+  workOrderNo     String   @unique // 生产单号 (如 HB26050033)
+  salesOrderId    String?  // 关联的销售订单
+  customerId      String?  // 关联客户
+  itemId          String   // 生产的成品物料 ID
+  itemName        String?  // 成品物料名称
+  itemCode        String?  // 成品物料编码
+  quantity        Int
+  startDate       DateTime // 下单/开始日期
+  endDate         DateTime // 出货/完工日期
+  status          String   @default("Draft") // Draft, InProgress, Completed
+
+  // 动态生产参数 (存储频率、锣牙、空载电流等非通用字段)
+  customAttributes Json?
+
+  maker           String?  // 制表人
+  auditor         String?  // 审核人
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// --- 发货管理模块 ---
+
+model DeliveryNote {
+  id              String   @id @default(cuid())
+  deliveryNo      String   @unique // 送货单号 (如 HB2026050019)
+  customerId      String
+  customerName    String?  // 客户名称
+  salesOrderId    String?
+  deliveryDate    DateTime
+  totalAmount     Float    @default(0)
+  status          String   @default("Draft") // Draft, Printed, Delivered
+
+  maker           String?  // 制单人
+  notes           String?  // 备注
+
+  items           DeliveryNoteItem[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model DeliveryNoteItem {
+  id              String   @id @default(cuid())
+  deliveryNoteId  String
+  deliveryNote    DeliveryNote @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+  itemId          String
+  itemName        String
+  itemCode        String?  // 物料编号
+  specifications  String?  // 规格
+  unit            String   @default("PCS")
+  quantity        Int
+  unitPrice       Float
+  taxRate         Float    @default(13)
+  taxAmount       Float
+  lineTotal       Float
+}
+
+// --- 销售商机管道 (CRM Pipeline) ---
+
+// 商机阶段定义
+enum OpportunityStage {
+  Qualification  // 资质初审
+  Discovery      // 需求挖掘
+  Proposal       // 方案报价
+  Negotiation    // 谈判合同
+  Won            // 赢单成单
+  Lost           // 输单流失
+}
+
+model Opportunity {
+  id            String   @id @default(cuid())
+  name          String   // 商机名称 (例如：XX集团模具采购项目)
+  customerId    String   // 关联客户
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  // 商机阶段：Qualification(资质初审), Discovery(需求挖掘), Proposal(方案报价), Negotiation(谈判合同), Won(赢单成单), Lost(输单流失)
+  stage         String   @default("Qualification") 
+  
+  value         Float    @default(0)   // 预计金额
+  probability   Int      @default(10)  // 赢单概率 (0-100)
+  closeDate     DateTime // 预计结单日期
+  
+  ownerId       String   // 负责人/跟进销售 ID
+  owner         User     @relation(fields: [ownerId], references: [id])
+  
+  notes         String?  // 备注/商机背景说明
+  customFields  Json?    // 扩展参数
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([stage])
+  @@index([ownerId])
+  @@index([customerId])
+
+  @@map("opportunities")
+}
+
+// --- 售后工单体系 (Customer Support) ---
+
+model Ticket {
+  id          String   @id @default(cuid())
+  ticketNo    String   @unique // 工单号 (如 TK-2605-0001)
+  title       String   // 故障/咨询概要
+  description String?  // 详细描述
+  
+  status      String   @default("Open")   // 状态: Open, InProgress, Resolved, Closed
+  priority    String   @default("Medium") // 优先级: Low, Medium, High, Urgent
+  
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  assigneeId  String?  // 处理人 (客服/工程师)
+  assignee    User?    @relation("AssignedTickets", fields: [assigneeId], references: [id])
+  
+  // 业财客一体化核心桥梁：强制关联底层 ERP 单据
+  salesOrderId String?
+  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id])
+  
+  dueDate     DateTime? // SLA 承诺解决期限
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([status])
+  @@index([priority])
+
+  @@map("tickets")
+}
+
+// ============================================================
+// Phase 4: BI 大屏轻量级 OLAP 快照引擎
+// ============================================================
+
+model MetricsSnapshot {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date // 记录日期（精确到天）
+  metricType  String   // 指标类型: SALES_FUNNEL, TICKET_SLA, REVENUE_FORECAST
+  value       Float    // 核心数值
+  payload     Json?    // 详细的维度数据 (如各个阶段的商机数量分布)
+
+  createdAt   DateTime @default(now())
+
+  @@unique([date, metricType])
+  @@index([metricType, date])
+
+  @@map("metrics_snapshots")
 }
